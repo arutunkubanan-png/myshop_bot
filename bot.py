@@ -1,13 +1,13 @@
 import asyncio
 import os
 
-from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.types import Message
+TOKEN = "9054630723:AAHcSHP69klnk9hCxu46mCDC0lMQmgJnZUc"
 
-load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
+
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -16,8 +16,8 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def cmd_start(message: Message):
     await message.answer(
-        "Привет! 👋 Это моя торговая площадка.\n"
-        "Здесь скоро появятся товары."
+        "Привет! 👋 Это торговая площадка.\n"
+        "Здесь с появятся товары."
     )
 
 
