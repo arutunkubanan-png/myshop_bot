@@ -6,38 +6,25 @@ import os
 import re
 import glob
 import random
-import json
 from datetime import datetime
 from telebot import types
 
 # ============ НАСТРОЙКИ — ЗАМЕНИ НА СВОЁ ============
-TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"  # Вставь новый токен после отзыва старого
-ADMIN_ID = 8770504764  # Вставь свой Telegram ID
-PAY_CARD = "2204 2402 9628 4682"
-MIN_DEPOSIT = 10000
-MAX_DEPOSIT = 100000
-MIN_WITHDRAW = 15000
-MIN_PRICE = 15000
-MAX_PRICE = 150000
-MAX_SELL_PRICE = 1000000
-PAIR_MIN_TOTAL = MIN_PRICE
-ULTRA_RARE_CHANCE = 10
-ULTRA_RARE_MULT = 4
-ULTRA_RARE_CAP = 500000
+TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"   # ← новый токен (старый отзови в @BotFather!)
+ADMIN_ID = 8770504764
+PAY_CARD = "2204 2402 9628 4682"    # ← номер твоей карты
+MIN_DEPOSIT = 10000                 # ← минимальное пополнение
+MAX_DEPOSIT = 100000                # ← максимальное пополнение
+MIN_WITHDRAW = 15000                # ← минимальный вывод
+MIN_PRICE = 15000                   # ← самая дешёвая картина
+MAX_PRICE = 150000                  # ← самая дорогая картина
+MAX_SELL_PRICE = 1000000            # ← максимум цены при перепродаже
 SUPPORT_USERNAME = "@NFThub_support_bot"
 PAGE_SIZE = 1
 BG_FILE = "profile_bg.png"
-WEBAPP_PORT = int(os.environ.get("PORT", 8443))
-#WEBAPP_URL = "https://nft-bot-h47h.onrender.com"
 # ===================================================
 
 bot = telebot.TeleBot(TOKEN)
-
-def notify(uid, text, reply_markup=None):
-    try:
-        bot.send_message(uid, text, reply_markup=reply_markup)
-    except Exception:
-        pass
 
 # ---------- База данных ----------
 db = sqlite3.connect("shop.db", check_same_thread=False)
@@ -70,7 +57,7 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS withdrawals (
     user_id INTEGER, card TEXT, amount INTEGER, status TEXT DEFAULT 'pending')""")
 cursor.execute("""CREATE TABLE IF NOT EXISTS marketplace (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nft_id INTEGER, nft_id2 INTEGER, seller_id INTEGER, price INTEGER)""")
+    nft_id INTEGER, seller_id INTEGER, price INTEGER)""")
 cursor.execute("""CREATE TABLE IF NOT EXISTS favorites (
     user_id INTEGER, nft_id INTEGER)""")
 cursor.execute("""CREATE TABLE IF NOT EXISTS deposits (
@@ -81,21 +68,12 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS bans (
     until REAL,
     reason TEXT)""")
 
-# ---------- Миграции ----------
 cols_users = [r[1] for r in cursor.execute("PRAGMA table_info(users)").fetchall()]
 if "username" not in cols_users:
     cursor.execute("ALTER TABLE users ADD COLUMN username TEXT")
-if "full_name" not in cols_users:
-    cursor.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
-if "verified" not in cols_users:
-    cursor.execute("ALTER TABLE users ADD COLUMN verified INTEGER DEFAULT 0")
-if "passed_captcha" not in cols_users:
-    cursor.execute("ALTER TABLE users ADD COLUMN passed_captcha INTEGER DEFAULT 0")
 cols_purch = [r[1] for r in cursor.execute("PRAGMA table_info(purchases)").fetchall()]
 if "seller_id" not in cols_purch:
     cursor.execute("ALTER TABLE purchases ADD COLUMN seller_id INTEGER")
-if "active" not in cols_purch:
-    cursor.execute("ALTER TABLE purchases ADD COLUMN active INTEGER DEFAULT 1")
 cols_wd = [r[1] for r in cursor.execute("PRAGMA table_info(withdrawals)").fetchall()]
 if "status" not in cols_wd:
     cursor.execute("ALTER TABLE withdrawals ADD COLUMN status TEXT DEFAULT 'pending'")
@@ -108,9 +86,6 @@ if "id" not in cols_wd:
         SELECT user_id, card, amount, status FROM withdrawals_old""")
     cursor.execute("DROP TABLE withdrawals_old")
     print("Миграция: таблица выводов пересоздана с колонкой id")
-cols_mp = [r[1] for r in cursor.execute("PRAGMA table_info(marketplace)").fetchall()]
-if "nft_id2" not in cols_mp:
-    cursor.execute("ALTER TABLE marketplace ADD COLUMN nft_id2 INTEGER")
 
 db.commit()
 
@@ -160,10 +135,6 @@ def get_username(user_id):
     row = cursor.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
     return row[0] if row and row[0] else None
 
-def is_verified(user_id):
-    row = cursor.execute("SELECT verified FROM users WHERE id = ?", (user_id,)).fetchone()
-    return bool(row and row[0])
-
 def find_user_by_input(text):
     text = text.strip().lstrip("@")
     if text.isdigit():
@@ -184,20 +155,8 @@ def get_pending_withdraw(user_id):
     return row[0] if row and row[0] else 0
 
 def get_owned_ids(user_id):
-    rows = cursor.execute(
-        "SELECT DISTINCT nft_id FROM purchases WHERE user_id = ? AND active = 1", (user_id,)
-    ).fetchall()
+    rows = cursor.execute("SELECT DISTINCT nft_id FROM purchases WHERE user_id = ?", (user_id,)).fetchall()
     return [r[0] for r in rows]
-
-def transfer_ownership(nft_id, from_user, to_user, price):
-    cursor.execute(
-        "UPDATE purchases SET active = 0 WHERE user_id = ? AND nft_id = ? AND active = 1",
-        (from_user, nft_id)
-    )
-    cursor.execute(
-        "INSERT INTO purchases (user_id, nft_id, nft_name, price, seller_id, active) VALUES (?, ?, ?, ?, ?, 1)",
-        (to_user, nft_id, NFT[nft_id]["name"], price, from_user)
-    )
 
 def get_bought_count(user_id):
     return cursor.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ?", (user_id,)).fetchone()[0]
@@ -227,7 +186,7 @@ _name_random.shuffle(_name_pool)
 def painting_name(idx):
     return _name_pool[(idx - 1) % len(_name_pool)]
 
-# ---------- Загрузка картин ----------
+# ---------- Загрузка картин: ВСЕ файлы из pictures, номера по порядку ----------
 def _natural_key(path):
     m = re.search(r"(\d+)", os.path.basename(path))
     return (int(m.group(1)) if m else 0, path)
@@ -239,11 +198,15 @@ _picture_paths = sorted(
     key=_natural_key,
 )
 
+# Каждому файлу по порядку присваиваем номер: 1, 2, 3... — независимо от имени файла
 _picture_numbers = list(range(1, len(_picture_paths) + 1))
 
-# ---------- Лестница цен ----------
+# ---------- Лестница цен: 15 000 → 150 000, шаги в разноброс ----------
 def build_price_ladder(count):
-    rnd = random.Random(4242)
+    """Цены по возрастанию от 15 000 до 150 000.
+    Шаги в разноброс. Если картин много — шаги автоматически подгоняются,
+    чтобы все картины шли по возрастанию до ровно 150 000."""
+    rnd = random.Random(4242)  # сид: цены одинаковы при каждом запуске
     if count <= 1:
         return [MIN_PRICE]
     if count == 2:
@@ -278,31 +241,6 @@ for _path, _i in zip(_picture_paths, _picture_numbers):
         "year": _year_random.randint(2023, 2026),
         "file": _path,
     }
-
-# ---------- Редкость ----------
-def assign_rarities():
-    rnd = random.Random(991)
-    for nid, item in NFT.items():
-        item["base_price"] = item["price"]
-        is_ultra = rnd.randint(1, ULTRA_RARE_CHANCE) == 1
-        item["rarity"] = "ultra" if is_ultra else "normal"
-        if is_ultra:
-            item["price"] = min(int(item["base_price"] * ULTRA_RARE_MULT), ULTRA_RARE_CAP)
-
-assign_rarities()
-
-def rarity_name(item):
-    return "💎 сверхредкая" if item.get("rarity") == "ultra" else "уникальная"
-
-def rarity_line(item):
-    if item.get("rarity") == "ultra":
-        return "💎 Сверхредкая! Таких больше нет нигде.\n"
-    return ""
-
-def is_listed(nid):
-    return cursor.execute(
-        "SELECT id FROM marketplace WHERE nft_id = ? OR nft_id2 = ?", (nid, nid)
-    ).fetchone()
 
 print(f"Загружено картин: {len(NFT)} из {len(_picture_paths)} файлов в папке pictures")
 print(f"Цены: от {fmt_rub(MIN_PRICE)} до {fmt_rub(MAX_PRICE)} ₽")
@@ -376,7 +314,7 @@ def nav_markup(page, total_pages, prefix):
     nav.row(*row)
     return nav
 
-# ---------- Площадка: официальные лоты ----------
+# ---------- Площадка: все картины официальными лотами ----------
 def seed_marketplace():
     sold_ids = {r[0] for r in cursor.execute("SELECT DISTINCT nft_id FROM purchases").fetchall()}
     added, updated = 0, 0
@@ -408,25 +346,6 @@ def seed_marketplace():
 
 seed_marketplace()
 
-# ---------- Капча ----------
-def send_captcha(chat_id):
-    a, b = random.randint(3, 19), random.randint(3, 19)
-    if random.random() < 0.5:
-        user_states[chat_id] = ("captcha", a + b)
-        bot.send_message(chat_id, f"🤖 Капча: сколько будет {a} + {b}?\n\nНапиши ответ одним числом.")
-    else:
-        c = random.randint(2, 9)
-        user_states[chat_id] = ("captcha", a * c)
-        bot.send_message(chat_id, f"🤖 Капча: сколько будет {a} × {c}?\n\nНапиши ответ одним числом.")
-
-def captcha_ok(chat_id):
-    st = user_states.get(chat_id)
-    if st and st[0] == "captcha":
-        bot.send_message(chat_id, "🤖 Сначала реши капчу!")
-        send_captcha(chat_id)
-        return False
-    return True
-
 # ---------- Клавиатуры ----------
 def profile_keyboard(admin_view=False):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -438,6 +357,7 @@ def profile_keyboard(admin_view=False):
     markup.row(types.KeyboardButton("❤️ Избранное"), types.KeyboardButton("🖼 Мои NFT"))
     markup.row(types.KeyboardButton("➕ Создать NFT"), types.KeyboardButton("⚙️ Настройки"))
     markup.row(types.KeyboardButton("📜 Транзакции"), types.KeyboardButton("🏪 Площадка"))
+    markup.row(types.KeyboardButton("🖼 Каталог"))
     markup.add(types.KeyboardButton("🆘 Поддержка"))
     return markup
 
@@ -449,7 +369,8 @@ def send_profile(chat_id, greet=False, name=None):
         text = (
             f"👋 <b>Привет, {name}!</b>\n\n"
             "Добро пожаловать в <b>NFT Маркет</b> — место, где живут коллекционные картины 💎\n\n"
-            "🏪 <b>Площадка</b> — витрина со всеми картинами, покупка в два касания\n"
+            "🏪 <b>Площадка</b> — листай картины от дешёвых к дорогим\n"
+            "🖼 <b>Каталог</b> — вся коллекция\n"
             "👤 <b>Личный кабинет</b> — баланс и твоя статистика\n"
             f"💳 <b>Пополнить</b> — закинь баланс от {fmt_rub(MIN_DEPOSIT)} ₽ и вперёд\n\n"
             "👇 Жми на кнопки ниже — начнём!"
@@ -460,13 +381,6 @@ def send_profile(chat_id, greet=False, name=None):
         owned = len(get_owned_ids(chat_id))
         bought = get_bought_count(chat_id)
         sold = get_sold_count(chat_id)
-        verif_row = cursor.execute("SELECT verified, full_name FROM users WHERE id = ?", (chat_id,)).fetchone()
-        verified = verif_row[0] if verif_row else 0
-        fio = verif_row[1] if verif_row else None
-        verif_line = (
-            f"Верификация: ✅ <b>Верифицирован</b>\nФИО: <b>{fio}</b>\n"
-            if verified and fio else "Верификация: ⚠️ <b>Не верифицирован</b>\n"
-        )
         text = (
             "👤 <b>Личный кабинет</b>\n\n"
             f"💰 Баланс: <b>{fmt_rub(get_balance(chat_id))} RUB</b>\n"
@@ -475,7 +389,7 @@ def send_profile(chat_id, greet=False, name=None):
             f"🖼 Картин в коллекции: <b>{owned}</b>\n"
             f"🛒 Куплено картин: <b>{bought}</b>\n"
             f"📤 Продано картин: <b>{sold}</b>\n\n"
-            f"{verif_line}"
+            "Верификация: ⚠️ <b>Не верифицирован</b>\n"
             f"{nick_line}"
             f"Ваш ID: <code>{chat_id}</code>\n\n"
             f"Дата и время: {now}"
@@ -500,10 +414,6 @@ def start(message):
         bot.send_message(message.chat.id, ban_message(message.chat.id))
         return
     name = message.from_user.first_name or "друг"
-    row = cursor.execute("SELECT passed_captcha FROM users WHERE id = ?", (message.chat.id,)).fetchone()
-    if not row or not row[0]:
-        send_captcha(message.chat.id)
-        return
     send_profile(message.chat.id, greet=True, name=name)
 
 # ---------- Кнопки профиля ----------
@@ -520,8 +430,6 @@ def menu_give(message):
 
 @bot.message_handler(func=lambda m: m.text == "💳 Пополнить")
 def menu_deposit(message):
-    if not captcha_ok(message.chat.id):
-        return
     if is_banned(message.chat.id):
         bot.send_message(message.chat.id, ban_message(message.chat.id))
         return
@@ -541,13 +449,8 @@ def menu_deposit(message):
 
 @bot.message_handler(func=lambda m: m.text == "💸 Вывести")
 def menu_withdraw(message):
-    if not captcha_ok(message.chat.id):
-        return
     if is_banned(message.chat.id):
         bot.send_message(message.chat.id, ban_message(message.chat.id))
-        return
-    if not is_verified(message.chat.id):
-        bot.send_message(message.chat.id, "⚠️ Вывод средств доступен только верифицированным.\nПройди «📝 Верификацию».")
         return
     user_states[message.chat.id] = "withdraw_card"
     bot.send_message(
@@ -560,25 +463,7 @@ def menu_withdraw(message):
 
 @bot.message_handler(func=lambda m: m.text == "📝 Верификация")
 def menu_verify(message):
-    chat_id = message.chat.id
-    if not captcha_ok(chat_id):
-        return
-    if is_banned(chat_id):
-        bot.send_message(chat_id, ban_message(chat_id))
-        return
-    row = cursor.execute("SELECT verified, full_name FROM users WHERE id = ?", (chat_id,)).fetchone()
-    if row and row[0]:
-        bot.send_message(chat_id, f"📝 Верификация\n\n✅ Вы верифицированы.\nФИО: <b>{row[1]}</b>", parse_mode="HTML")
-        return
-    user_states[chat_id] = "verify_fio"
-    bot.send_message(
-        chat_id,
-        "📝 Верификация\n\n"
-        "Напиши свои фамилию, имя и отчество одной строкой.\n"
-        "Пример: Иванов Иван Иванович\n\n"
-        "⚠️ Заявка уйдёт только админу проекта.",
-        parse_mode="HTML"
-    )
+    bot.send_message(message.chat.id, "📝 Верификация\n\nСтатус: ⚠️ Не верифицирован.\n\nДля верификации отправьте документы админу: " + SUPPORT_USERNAME)
 
 @bot.message_handler(func=lambda m: m.text == "❤️ Избранное")
 def menu_favorites(message):
@@ -606,12 +491,11 @@ def menu_my_nft(message):
         item = NFT[nid]
         markup = types.InlineKeyboardMarkup()
         if not banned:
-            markup.add(types.InlineKeyboardButton("🛒 Продать (парой)", callback_data=f"sellpick_{nid}"))
+            markup.add(types.InlineKeyboardButton("🏪 Выставить на площадку", callback_data=f"sellpick_{nid}"))
         caption = (
-            f"{item['name']} — {rarity_name(item)}\n"
+            f"{item['name']}\n"
             f"📅 Год выпуска: {item['year']}\n"
             f"💰 Цена в каталоге: {fmt_rub(item['price'])} ₽\n"
-            f"{rarity_line(item)}"
             f"✨ Уникальный экземпляр — 1 из 1"
         )
         safe_send_photo(message.chat.id, item["file"], caption, markup)
@@ -642,18 +526,47 @@ def menu_transactions(message):
 
 @bot.message_handler(func=lambda m: m.text == "🏪 Площадка")
 def menu_market(message):
-    if not captcha_ok(message.chat.id):
-        return
     if is_banned(message.chat.id):
         bot.send_message(message.chat.id, ban_message(message.chat.id))
         return
-    # Открываем площадку прямо в Telegram: фотографии, цены и кнопки покупки.
     send_market_page(message.chat.id, 0)
+
+@bot.message_handler(func=lambda m: m.text == "🖼 Каталог")
+def menu_catalog(message):
+    send_catalog_page(message.chat.id, 0)
 
 @bot.message_handler(func=lambda m: m.text == "🆘 Поддержка")
 def menu_support(message):
     user_states[message.chat.id] = "support"
     bot.send_message(message.chat.id, f"🆘 Поддержка.\n\nНапиши свой вопрос — админ ответит.\nИли пиши напрямую: {SUPPORT_USERNAME}")
+
+# ---------- Каталог: по возрастанию цены ----------
+def send_catalog_page(chat_id, page):
+    ids = sorted(NFT.keys(), key=lambda n: NFT[n]["price"])
+    if not ids:
+        bot.send_message(chat_id, "Каталог пуст — положи картины в папку pictures и перезапусти бота.")
+        return
+    total_pages = (len(ids) + PAGE_SIZE - 1) // PAGE_SIZE
+    page = max(0, min(page, total_pages - 1))
+    nid = ids[page]
+    item = NFT[nid]
+    caption = (
+        f"🖼 {item['name']}\n\n"
+        f"📅 Год выпуска: {item['year']}\n"
+        f"💰 Цена: {fmt_rub(item['price'])} ₽\n"
+        f"✨ Уникальный экземпляр — 1 из 1"
+    )
+    lot = cursor.execute("SELECT id, seller_id, price FROM marketplace WHERE nft_id = ?", (nid,)).fetchone()
+    markup = types.InlineKeyboardMarkup()
+    if lot:
+        if lot[1] != chat_id:
+            markup.add(types.InlineKeyboardButton(f"🛒 Купить на площадке за {fmt_rub(lot[2])} ₽", callback_data=f"mbuy_{lot[0]}"))
+        else:
+            markup.add(types.InlineKeyboardButton("❌ Снять с продажи", callback_data=f"unlist_{lot[0]}"))
+    markup.add(types.InlineKeyboardButton("❤️ В избранное", callback_data=f"fav_{nid}"))
+    for row in nav_markup(page, total_pages, "cat_").keyboard:
+        markup.row(*row)
+    show_photo_page(chat_id, "catalog", item["file"], caption, markup)
 
 # ---------- Фото ----------
 @bot.message_handler(content_types=['photo'])
@@ -673,10 +586,7 @@ def photo_handler(message):
         db.commit()
         user_states[message.chat.id] = None
         bot.send_message(message.chat.id, "📸 Скриншот получен! Админ проверит перевод и одобрит пополнение ⏳")
-        try:
-            bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
-        except Exception:
-            pass
+        bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
         kb = types.InlineKeyboardMarkup()
         kb.row(
             types.InlineKeyboardButton("✅ Одобрить", callback_data=f"ok_{dep_id}_{message.chat.id}"),
@@ -687,68 +597,6 @@ def photo_handler(message):
         bot.send_message(ADMIN_ID, f"💳 Заявка на пополнение №{dep_id} от пользователя {message.chat.id}{nick_line}\nПроверь перевод на карте, затем выбери:", reply_markup=kb)
     else:
         bot.send_message(message.chat.id, "Фото получил, но сейчас оно не нужно 🙂")
-
-# ---------- Выбор из мини-витрины ----------
-def webapp_buy(chat_id, listing_id):
-    if is_banned(chat_id):
-        bot.send_message(chat_id, ban_message(chat_id))
-        return
-    lot = cursor.execute(
-        "SELECT nft_id, nft_id2, seller_id, price FROM marketplace WHERE id = ?", (listing_id,)
-    ).fetchone()
-    if not lot:
-        bot.send_message(chat_id, "Лот уже не существует.")
-        return
-    nft_id, nft_id2, seller_id, price = lot
-    if nft_id not in NFT:
-        bot.send_message(chat_id, "Эта картина больше не доступна.")
-        return
-    if seller_id == chat_id:
-        bot.send_message(chat_id, "Это твой собственный лот 🙂")
-        return
-    if get_balance(chat_id) < price:
-        bot.send_message(chat_id, f"Не хватает {fmt_rub(price - get_balance(chat_id))} ₽. Пополни баланс!")
-        return
-    change_balance(chat_id, -price)
-    change_balance(seller_id, price)
-    if nft_id2 and nft_id2 in NFT:
-        p1 = price // 2
-        for nid, p in ((nft_id, p1), (nft_id2, price - p1)):
-            transfer_ownership(nid, seller_id, chat_id, p)
-        bot.send_message(chat_id,
-            f"🎉 Пара куплена!\n"
-            f"1) {NFT[nft_id]['name']}\n"
-            f"2) {NFT[nft_id2]['name']}\n\n"
-            f"💰 Оплачено: {fmt_rub(price)} ₽")
-    else:
-        transfer_ownership(nft_id, seller_id, chat_id, price)
-        bot.send_message(chat_id, f"🎉 Куплено! {NFT[nft_id]['name']} — {fmt_rub(price)} ₽\nСмотри в «🖼 Мои NFT».")
-    cursor.execute("DELETE FROM marketplace WHERE id = ?", (listing_id,))
-    db.commit()
-    page_msgs.pop((chat_id, "market"), None)
-    try:
-        if nft_id2 and nft_id2 in NFT:
-            bot.send_message(seller_id, f"💰 Твою пару ({NFT[nft_id]['name']} + {NFT[nft_id2]['name']}) купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
-        else:
-            bot.send_message(seller_id, f"💰 Твою картину {NFT[nft_id]['name']} купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
-    except Exception:
-        pass
-
-@bot.message_handler(content_types=['web_app_data'])
-def webapp_handler(message):
-    chat_id = message.chat.id
-    register(chat_id, message.from_user.username)
-    try:
-        payload = json.loads(message.web_app_data.data)
-    except Exception:
-        return
-    if payload.get("action") != "buy":
-        return
-    try:
-        listing_id = int(payload["lot_id"])
-    except Exception:
-        return
-    webapp_buy(chat_id, listing_id)
 
 # ---------- Команды админа ----------
 @bot.message_handler(commands=['add'])
@@ -763,7 +611,7 @@ def admin_add(message):
             return
         change_balance(uid, int(amount))
         bot.send_message(ADMIN_ID, f"Баланс {uid} пополнен на {amount} ₽")
-        notify(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(int(amount))} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        bot.send_message(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(int(amount))} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
     except Exception:
         bot.send_message(ADMIN_ID, "Формат: /add ник_или_id сумма")
 
@@ -779,7 +627,7 @@ def admin_minus(message):
             return
         change_balance(uid, -int(amount))
         bot.send_message(ADMIN_ID, f"Списано {amount} ₽ у {uid}")
-        notify(uid, f"➖ Списание {fmt_rub(int(amount))} ₽.\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        bot.send_message(uid, f"➖ Списание {fmt_rub(int(amount))} ₽.\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
     except Exception:
         bot.send_message(ADMIN_ID, "Формат: /minus ник_или_id сумма")
 
@@ -831,33 +679,6 @@ def admin_lot(message):
         bot.send_message(ADMIN_ID, f"✅ Лот создан: {NFT[nid]['name']} — {fmt_rub(price)} ₽")
     db.commit()
 
-@bot.message_handler(commands=['rare'])
-def admin_rare(message):
-    if message.chat.id != ADMIN_ID:
-        return
-    try:
-        nid = int(message.text.split()[1])
-    except Exception:
-        bot.send_message(ADMIN_ID, "Формат: /rare номер_картины (например: /rare 5)")
-        return
-    if nid not in NFT:
-        bot.send_message(ADMIN_ID, "Картины с таким номером нет.")
-        return
-    item = NFT[nid]
-    if item.get("rarity") == "ultra":
-        item["rarity"] = "normal"
-        item["price"] = item["base_price"]
-        status = "теперь обычная"
-    else:
-        item["rarity"] = "ultra"
-        item["price"] = min(int(item["base_price"] * ULTRA_RARE_MULT), ULTRA_RARE_CAP)
-        status = "теперь 💎 сверхредкая"
-    lot = cursor.execute("SELECT id, seller_id FROM marketplace WHERE nft_id = ?", (nid,)).fetchone()
-    if lot and lot[1] == ADMIN_ID:
-        cursor.execute("UPDATE marketplace SET price = ? WHERE id = ?", (item["price"], lot[0]))
-    db.commit()
-    bot.send_message(ADMIN_ID, f"{NFT[nid]['name']} {status}. Цена в каталоге: {fmt_rub(item['price'])} ₽")
-
 @bot.message_handler(commands=['ban'])
 def admin_ban(message):
     if message.chat.id != ADMIN_ID:
@@ -879,10 +700,13 @@ def admin_ban(message):
     until = time.time() + hours * 3600 if hours > 0 else 0
     cursor.execute("INSERT OR REPLACE INTO bans (user_id, until, reason) VALUES (?, ?, ?)", (uid, until, reason))
     db.commit()
-    if until > 0:
-        notify(uid, f"⛔ Вы забанены на торговой площадке на {hours:g} ч.\nПричина: {reason}\n\n🆘 В поддержку написать можно.")
-    else:
-        notify(uid, f"⛔ Вы забанены на торговой площадке навсегда.\nПричина: {reason}\n\n🆘 В поддержку написать можно.")
+    try:
+        if until > 0:
+            bot.send_message(uid, f"⛔ Вы забанены на торговой площадке на {hours:g} ч.\nПричина: {reason}\n\n🆘 В поддержку написать можно.")
+        else:
+            bot.send_message(uid, f"⛔ Вы забанены на торговой площадке навсегда.\nПричина: {reason}\n\n🆘 В поддержку написать можно.")
+    except Exception:
+        pass
     term = "навсегда" if until == 0 else f"{hours:g} ч"
     bot.send_message(ADMIN_ID, f"✅ Пользователь {uid} забанен ({term}). Причина: {reason}")
 
@@ -902,7 +726,10 @@ def admin_unban(message):
     cursor.execute("DELETE FROM bans WHERE user_id = ?", (uid,))
     db.commit()
     bot.send_message(ADMIN_ID, f"✅ Бан снят с {uid}")
-    notify(uid, "✅ Бан снят! Торговая площадка снова доступна.")
+    try:
+        bot.send_message(uid, "✅ Бан снят! Торговая площадка снова доступна.")
+    except Exception:
+        pass
 
 @bot.message_handler(commands=['banlist'])
 def admin_banlist(message):
@@ -930,42 +757,8 @@ def text_handler(message):
     register(chat_id, message.from_user.username)
     state = user_states.get(chat_id)
 
-    # капча — выше всех остальных состояний
-    if state and state[0] == "captcha":
-        if message.text.strip() == str(state[1]):
-            cursor.execute("UPDATE users SET passed_captcha = 1 WHERE id = ?", (chat_id,))
-            db.commit()
-            user_states[chat_id] = None
-            bot.send_message(chat_id, "✅ Капча пройдена! Теперь заполни верификацию: жми «📝 Верификация».")
-        else:
-            bot.send_message(chat_id, "❌ Неверно. Решим капчу ещё раз.")
-            send_captcha(chat_id)
-        return
-
     if state == "deposit_screenshot":
         bot.send_message(chat_id, "📸 Пришли скриншот перевода картинкой — так заявка обработается быстрее.")
-        return
-
-    if state == "verify_fio":
-        parts = message.text.strip().split()
-        if len(parts) != 3 or not all(p.isalpha() and len(p) >= 2 for p in parts):
-            bot.send_message(chat_id, "Нужны ровно три слова. Пример: Иванов Иван Иванович")
-            return
-        full_name = " ".join(p.capitalize() for p in parts)
-        cursor.execute("UPDATE users SET full_name = ? WHERE id = ?", (full_name, chat_id))
-        db.commit()
-        user_states[chat_id] = None
-        bot.send_message(chat_id, "✅ ФИО отправлено. Админ рассмотрит заявку ⏳")
-        nick = get_username(chat_id)
-        nick_line = f" (@{nick})" if nick else ""
-        kb = types.InlineKeyboardMarkup()
-        kb.row(
-            types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"vok_{chat_id}"),
-            types.InlineKeyboardButton("❌ Отклонить", callback_data=f"vno_{chat_id}"),
-        )
-        bot.send_message(ADMIN_ID,
-            f"📝 Заявка на верификацию от {chat_id}{nick_line}\nФИО: {full_name}",
-            reply_markup=kb)
         return
 
     if state == "give_id":
@@ -995,7 +788,10 @@ def text_handler(message):
         nick = get_username(uid)
         nick_line = f" (@{nick})" if nick else ""
         bot.send_message(chat_id, f"✅ Готово! Пользователю {uid}{nick_line} выдано {fmt_rub(amount)} ₽.\n💰 Его баланс: {fmt_rub(get_balance(uid))} ₽")
-        notify(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(amount)} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        try:
+            bot.send_message(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(amount)} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        except Exception:
+            pass
         return
 
     if state and state[0] == "approve_amount":
@@ -1013,7 +809,7 @@ def text_handler(message):
         db.commit()
         user_states[chat_id] = None
         bot.send_message(chat_id, f"✅ Заявка №{dep_id} одобрена: +{fmt_rub(amount)} ₽ пользователю {uid}")
-        notify(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(amount)} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        bot.send_message(uid, f"💳 На вашем балансе пополнение: +{fmt_rub(amount)} ₽\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
         return
 
     if state and state[0] == "create_nft_info":
@@ -1036,62 +832,55 @@ def text_handler(message):
             downloaded = bot.download_file(file_info.file_path)
             with open(file_path, "wb") as f:
                 f.write(downloaded)
-            NFT[new_id] = {"name": name, "price": price, "base_price": price,
-                           "year": _year_random.randint(2023, 2026), "file": file_path,
-                           "rarity": "normal"}
+            NFT[new_id] = {"name": name, "price": price, "year": _year_random.randint(2023, 2026), "file": file_path}
             cursor.execute("INSERT INTO marketplace (nft_id, seller_id, price) VALUES (?, ?, ?)", (new_id, ADMIN_ID, price))
             db.commit()
             user_states[chat_id] = None
-            bot.send_message(chat_id, f"✅ NFT создан и выставлен на площадку: {name} за {fmt_rub(price)} ₽!\nСделать его сверхредким: /rare {new_id}")
+            bot.send_message(chat_id, f"✅ NFT создан и выставлен на площадку: {name} за {fmt_rub(price)} ₽!")
         except Exception:
             bot.send_message(chat_id, "Формат: Название Цена, например: 🌟 Star 25000")
         return
 
-    if state and state[0] == "sellpair_price":
+    if state and state[0] == "sell_price":
         if is_banned(chat_id):
             user_states[chat_id] = None
             bot.send_message(chat_id, ban_message(chat_id))
             return
-        nid1, nid2 = state[1], state[2]
+        nid = state[1]
         try:
             price = int(message.text.strip())
         except ValueError:
-            bot.send_message(chat_id, "Нужно число, например: 60000")
+            bot.send_message(chat_id, "Нужно число, например: 25000:")
             return
-        if price < PAIR_MIN_TOTAL:
-            bot.send_message(chat_id, f"⚠️ Минимальная цена пары — {fmt_rub(PAIR_MIN_TOTAL)} ₽. Напиши снова:")
+        if price < MIN_PRICE:
+            bot.send_message(chat_id, f"⚠️ Минимальная цена продажи — {fmt_rub(MIN_PRICE)} ₽. Укажи цену не ниже:")
             return
-        if price > MAX_SELL_PRICE * 2:
-            bot.send_message(chat_id, f"⚠️ Максимум за пару — {fmt_rub(MAX_SELL_PRICE * 2)} ₽. Напиши снова:")
+        if price > MAX_SELL_PRICE:
+            bot.send_message(chat_id, f"⚠️ Максимальная цена продажи — {fmt_rub(MAX_SELL_PRICE)} ₽. Укажи цену не выше:")
             return
-        if is_listed(nid1) or is_listed(nid2):
-            bot.send_message(chat_id, "Одна из картин уже выставлена. Начни заново через «🖼 Мои NFT».")
+        already = cursor.execute("SELECT id, seller_id FROM marketplace WHERE nft_id = ?", (nid,)).fetchone()
+        if already:
+            if already[1] == chat_id:
+                cursor.execute("UPDATE marketplace SET price = ? WHERE nft_id = ?", (price, nid))
+                db.commit()
+                bot.send_message(chat_id, f"✅ Цена обновлена: {fmt_rub(price)} ₽")
+            else:
+                bot.send_message(chat_id, "Эта картина уже выставлена другим человеком.")
             user_states[chat_id] = None
             return
-        cursor.execute(
-            "INSERT INTO marketplace (nft_id, nft_id2, seller_id, price) VALUES (?, ?, ?, ?)",
-            (nid1, nid2, chat_id, price)
-        )
+        cursor.execute("INSERT INTO marketplace (nft_id, seller_id, price) VALUES (?, ?, ?)", (nid, chat_id, price))
         db.commit()
         user_states[chat_id] = None
-        listing_id = cursor.execute("SELECT id FROM marketplace WHERE nft_id = ? AND nft_id2 = ?", (nid1, nid2)).fetchone()[0]
+        listing_id = cursor.execute("SELECT id FROM marketplace WHERE nft_id = ?", (nid,)).fetchone()[0]
         kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("❌ Снять пару с продажи", callback_data=f"unlist_{listing_id}"))
-        bot.send_message(chat_id,
-            f"✅ Пара выставлена за {fmt_rub(price)} ₽:\n"
-            f"1) {NFT[nid1]['name']}\n"
-            f"2) {NFT[nid2]['name']}\n\n"
-            f"Когда купят — {fmt_rub(price)} ₽ сразу на твой баланс.", reply_markup=kb)
+        kb.add(types.InlineKeyboardButton("❌ Снять с продажи", callback_data=f"unlist_{listing_id}"))
+        bot.send_message(chat_id, f"✅ {NFT[nid]['name']} выставлена за {fmt_rub(price)} ₽. Когда купят — деньги сразу на твой баланс.", reply_markup=kb)
         return
 
     if state == "withdraw_card":
         if is_banned(chat_id):
             user_states[chat_id] = None
             bot.send_message(chat_id, ban_message(chat_id))
-            return
-        if not is_verified(chat_id):
-            user_states[chat_id] = None
-            bot.send_message(chat_id, "⚠️ Вывод средств доступен только верифицированным.\nПройди «📝 Верификацию».")
             return
         card = message.text.strip()
         if len(card) < 12 or not any(ch.isdigit() for ch in card):
@@ -1106,15 +895,11 @@ def text_handler(message):
             user_states[chat_id] = None
             bot.send_message(chat_id, ban_message(chat_id))
             return
-        if not is_verified(chat_id):
-            user_states[chat_id] = None
-            bot.send_message(chat_id, "⚠️ Вывод средств доступен только верифицированным.\nПройди «📝 Верификацию».")
-            return
         card = state[1]
         try:
             amount = int(message.text.strip())
         except ValueError:
-            bot.send_message(chat_id, "Нужно число, например: 20000")
+            bot.send_message(chat_id, "Нужно число, например: 20000:")
             return
         balance = get_balance(chat_id)
         if amount < MIN_WITHDRAW:
@@ -1166,10 +951,10 @@ def text_handler(message):
 
     bot.send_message(chat_id, "Выбери действие кнопкой ниже 👇", reply_markup=profile_keyboard(admin_view=(chat_id == ADMIN_ID)))
 
-# ---------- Площадка (резервный список, если WEBAPP_URL пустая) ----------
+# ---------- Площадка: просто листаешь, цены растут от дешёвых к дорогим ----------
 def send_market_page(chat_id, page):
     lots = cursor.execute(
-        "SELECT id, nft_id, nft_id2, seller_id, price FROM marketplace ORDER BY price ASC"
+        "SELECT id, nft_id, seller_id, price FROM marketplace ORDER BY price ASC"
     ).fetchall()
 
     if not lots:
@@ -1178,150 +963,25 @@ def send_market_page(chat_id, page):
 
     total_pages = (len(lots) + PAGE_SIZE - 1) // PAGE_SIZE
     page = max(0, min(page, total_pages - 1))
-    lot_id, nft_id, nft_id2, seller_id, price = lots[page]
+    lot_id, nft_id, seller_id, price = lots[page]
     if nft_id not in NFT:
         return
     item = NFT[nft_id]
     markup = types.InlineKeyboardMarkup()
     if seller_id != chat_id:
-        if nft_id2:
-            markup.add(types.InlineKeyboardButton(f"🛒 Купить пару за {fmt_rub(price)} ₽", callback_data=f"mbuy_{lot_id}"))
-        else:
-            markup.add(types.InlineKeyboardButton(f"🛒 Купить за {fmt_rub(price)} ₽", callback_data=f"mbuy_{lot_id}"))
+        markup.add(types.InlineKeyboardButton(f"🛒 Купить за {fmt_rub(price)} ₽", callback_data=f"mbuy_{lot_id}"))
     else:
         markup.add(types.InlineKeyboardButton("❌ Снять с продажи", callback_data=f"unlist_{lot_id}"))
     markup.add(types.InlineKeyboardButton("❤️ В избранное", callback_data=f"fav_{nft_id}"))
     for row in nav_markup(page, total_pages, "mpage_").keyboard:
         markup.row(*row)
-
-    if nft_id2 and nft_id2 in NFT:
-        item2 = NFT[nft_id2]
-        caption = (
-            f"🛒 Лот-пара из двух картин\n\n"
-            f"1) 🖼 {item['name']} — {rarity_name(item)}\n"
-            f"2) 🖼 {item2['name']} — {rarity_name(item2)}\n\n"
-            f"💰 Цена за пару: {fmt_rub(price)} ₽"
-        )
-        show_photo_page(chat_id, "market", item["file"], caption, markup)
-    else:
-        caption = (
-            f"🖼 {item['name']}\n\n"
-            f"📅 Год выпуска: {item['year']}\n"
-            f"💰 Цена: {fmt_rub(price)} ₽\n"
-            f"{rarity_line(item)}"
-            f"✨ Уникальный экземпляр — 1 из 1"
-        )
-        show_photo_page(chat_id, "market", item["file"], caption, markup)
-
-# ---------- Мини-витрина (веб-сервер в этом же процессе) ----------
-WEBAPP_HTML = """<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<title>NFT Маркет</title>
-<style>
-  body { background:#12101c; color:#fff; font-family:-apple-system,Arial,sans-serif; margin:0; padding:16px; }
-  h1 { font-size:22px; margin:4px 0 14px; }
-  .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
-  .card { background:#1d1930; border-radius:14px; overflow:hidden; }
-  .card img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
-  .info { padding:10px; }
-  .name { font-size:14px; font-weight:600; margin-bottom:4px; }
-  .price { font-size:15px; color:#8de05c; font-weight:700; margin-bottom:8px; }
-  .pair { font-size:11px; color:#a99fd0; margin-bottom:6px; }
-  .rare { color:#ffd54f; }
-  .buy { width:100%; padding:9px 0; border:none; border-radius:10px;
-         background:#7c4dff; color:#fff; font-weight:600; font-size:14px; }
-</style>
-</head>
-<body>
-<h1>🏪 Площадка</h1>
-<div class="grid" id="grid">Загрузка…</div>
-<script>
-const tg = window.Telegram.WebApp;
-tg.expand();
-
-async function load() {
-  const lots = await (await fetch("/api/lots")).json();
-  const grid = document.getElementById("grid");
-  grid.innerHTML = "";
-  if (!lots.length) {
-    grid.innerHTML = "<div style='color:#a99fd0'>Пока пусто. Лоты появятся здесь.</div>";
-    return;
-  }
-  for (const lot of lots) {
-    const card = document.createElement("div");
-    card.className = "card";
-    const img = `/api/photo/${lot.nft_id}`;
-    let rareTag = lot.rarity === "ultra" ? "<span class='rare'>💎 сверхредкая</span>" : "";
-    let pairLine = "";
-    if (lot.nft_id2) pairLine = `<div class="pair">Пара: + ${lot.name2}</div>`;
-    card.innerHTML = `
-      <img src="${img}" alt="">
-      <div class="info">
-        <div class="name">${lot.name1} ${rareTag}</div>
-        ${pairLine}
-        <div class="price">${lot.price.toLocaleString("ru-RU")} ₽${lot.nft_id2 ? " за пару" : ""}</div>
-        <button class="buy">Купить</button>
-      </div>`;
-    card.querySelector(".buy").onclick = () => {
-      tg.sendData(JSON.stringify({ action: "buy", lot_id: lot.id }));
-    };
-    grid.appendChild(card);
-  }
-}
-load();
-</script>
-</body>
-</html>"""
-
-try:
-    from flask import Flask, jsonify, send_file
-    webapp = Flask(__name__)
-
-    @webapp.route("/")
-    def web_index():
-        return WEBAPP_HTML
-
-    @webapp.route("/api/lots")
-    def web_lots():
-        rows = cursor.execute(
-            "SELECT id, nft_id, nft_id2, seller_id, price FROM marketplace ORDER BY price ASC"
-        ).fetchall()
-        out = []
-        for lot_id, nft_id, nft_id2, seller_id, price in rows:
-            i1 = NFT.get(nft_id)
-            i2 = NFT.get(nft_id2) if nft_id2 else None
-            out.append({
-                "id": lot_id,
-                "nft_id": nft_id,
-                "nft_id2": nft_id2,
-                "price": price,
-                "name1": i1["name"] if i1 else f"Картина #{nft_id}",
-                "name2": i2["name"] if i2 else "",
-                "rarity": i1.get("rarity", "normal") if i1 else "normal",
-            })
-        return jsonify(out)
-
-    @webapp.route("/api/photo/<int:nid>")
-    def web_photo(nid):
-        item = NFT.get(nid)
-        if not item or not os.path.exists(item["file"]):
-            return "not found", 404
-        return send_file(item["file"])
-
-    def run_webapp():
-        try:
-            webapp.run(host="0.0.0.0", port=WEBAPP_PORT, threaded=True, use_reloader=False)
-        except Exception as e:
-            print(f"Мини-витрина не запущена: {e}")
-
-    threading.Thread(target=run_webapp, daemon=True).start()
-    print(f"Мини-витрина: {WEBAPP_URL} (порт {WEBAPP_PORT})")
-except ImportError:
-    print("Flask не установлен — мини-витрина отключена (pip install flask). Бот работает без неё.")
+    caption = (
+        f"🖼 {item['name']}\n\n"
+        f"📅 Год выпуска: {item['year']}\n"
+        f"💰 Цена: {fmt_rub(price)} ₽\n"
+        f"✨ Уникальный экземпляр — 1 из 1"
+    )
+    show_photo_page(chat_id, "market", item["file"], caption, markup)
 
 # ---------- Кнопки ----------
 @bot.callback_query_handler(func=lambda call: True)
@@ -1346,29 +1006,7 @@ def callbacks(call):
         cursor.execute("UPDATE deposits SET status = 'rejected' WHERE id = ?", (int(dep_id),))
         db.commit()
         bot.send_message(ADMIN_ID, f"❌ Заявка №{dep_id} отклонена.")
-        notify(int(uid), "❌ Твоя заявка на пополнение отклонена. Если считаешь, что это ошибка — напиши в 🆘 Поддержку.")
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith("vok_"):
-        if chat_id != ADMIN_ID:
-            bot.answer_callback_query(call.id)
-            return
-        uid = int(data.split("_")[1])
-        cursor.execute("UPDATE users SET verified = 1 WHERE id = ?", (uid,))
-        db.commit()
-        bot.send_message(ADMIN_ID, f"✅ Пользователь {uid} верифицирован.")
-        notify(uid, "✅ Твоя верификация подтверждена! Все функции открыты.")
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith("vno_"):
-        if chat_id != ADMIN_ID:
-            bot.answer_callback_query(call.id)
-            return
-        uid = int(data.split("_")[1])
-        cursor.execute("UPDATE users SET verified = 0 WHERE id = ?", (uid,))
-        db.commit()
-        bot.send_message(ADMIN_ID, f"❌ Верификация {uid} отклонена.")
-        notify(uid, "❌ Твоя заявка на верификацию отклонена. Подай заново через «📝 Верификацию».")
+        bot.send_message(int(uid), "❌ Твоя заявка на пополнение отклонена. Если считаешь, что это ошибка — напиши в 🆘 Поддержку.")
         bot.answer_callback_query(call.id)
 
     elif data.startswith("wok_"):
@@ -1388,7 +1026,7 @@ def callbacks(call):
         cursor.execute("UPDATE withdrawals SET status = 'approved' WHERE id = ?", (wd_id,))
         db.commit()
         bot.send_message(ADMIN_ID, f"✅ Вывод №{wd_id} одобрен. Переведи {fmt_rub(amount)} ₽ на карту пользователя вручную.")
-        notify(uid, f"✅ Твоя заявка на вывод {fmt_rub(amount)} ₽ одобрена! Деньги придут на карту в ближайшее время.")
+        bot.send_message(uid, f"✅ Твоя заявка на вывод {fmt_rub(amount)} ₽ одобрена! Деньги придут на карту в ближайшее время.")
         bot.answer_callback_query(call.id)
 
     elif data.startswith("wno_"):
@@ -1409,8 +1047,12 @@ def callbacks(call):
         cursor.execute("UPDATE withdrawals SET status = 'rejected' WHERE id = ?", (wd_id,))
         db.commit()
         bot.send_message(ADMIN_ID, f"❌ Вывод №{wd_id} отклонён. {fmt_rub(amount)} ₽ возвращены на баланс пользователя.")
-        notify(uid, f"❌ Твоя заявка на вывод {fmt_rub(amount)} ₽ отклонена. Деньги возвращены на баланс.\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
+        bot.send_message(uid, f"❌ Твоя заявка на вывод {fmt_rub(amount)} ₽ отклонена. Деньги возвращены на баланс.\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
         bot.answer_callback_query(call.id)
+
+    elif data.startswith("cat_"):
+        bot.answer_callback_query(call.id)
+        send_catalog_page(chat_id, int(data.split("_")[1]))
 
     elif data.startswith("favshow_"):
         nid = int(data.split("_")[1])
@@ -1419,10 +1061,9 @@ def callbacks(call):
             return
         item = NFT[nid]
         caption = (
-            f"{item['name']} — {rarity_name(item)}\n"
+            f"{item['name']}\n"
             f"📅 Год выпуска: {item['year']}\n"
             f"💰 Цена в каталоге: {fmt_rub(item['price'])} ₽\n"
-            f"{rarity_line(item)}"
             f"✨ Уникальный экземпляр — 1 из 1"
         )
         lot = cursor.execute("SELECT id, seller_id, price FROM marketplace WHERE nft_id = ?", (nid,)).fetchone()
@@ -1437,10 +1078,6 @@ def callbacks(call):
     elif data.startswith("mpage_"):
         bot.answer_callback_query(call.id)
         send_market_page(chat_id, int(data.split("_")[1]))
-
-    elif data == "market_list":
-        bot.answer_callback_query(call.id)
-        send_market_page(chat_id, 0)
 
     elif data.startswith("fav_"):
         nid = int(data.split("_")[1])
@@ -1466,7 +1103,7 @@ def callbacks(call):
             for nid in owned:
                 if nid in NFT:
                     markup.add(types.InlineKeyboardButton(NFT[nid]["name"], callback_data=f"sellpick_{nid}"))
-            bot.send_message(chat_id, "🛒 Какую картину продать? (продажа только парами)", reply_markup=markup)
+            bot.send_message(chat_id, "📈 Какую картину выставить на продажу?", reply_markup=markup)
         bot.answer_callback_query(call.id)
 
     elif data.startswith("sellpick_"):
@@ -1475,65 +1112,9 @@ def callbacks(call):
             bot.answer_callback_query(call.id)
             return
         nid = int(data.split("_")[1])
-        if nid not in NFT:
-            bot.answer_callback_query(call.id, "Картина не найдена.")
-            return
-        if is_listed(nid):
-            bot.send_message(chat_id, "Эта картина уже стоит на площадке.")
-            bot.answer_callback_query(call.id)
-            return
-        rarity = NFT[nid].get("rarity", "normal")
-        candidates = []
-        for x in get_owned_ids(chat_id):
-            if x != nid and x in NFT and NFT[x].get("rarity", "normal") == rarity and not is_listed(x):
-                candidates.append(x)
-        if not candidates:
-            label = "💎 сверхредких" if rarity == "ultra" else "обычных (уникальных)"
-            bot.send_message(
-                chat_id,
-                f"🛒 Продавать можно только парами: {rarity_name(NFT[nid])} + {rarity_name(NFT[nid])}.\n\n"
-                f"У тебя нет второй {label} картины, которую можно составить в пару.\n"
-                f"Купи ещё одну и возвращайся!"
-            )
-            bot.answer_callback_query(call.id)
-            return
-        markup = types.InlineKeyboardMarkup()
-        for x in candidates:
-            markup.add(types.InlineKeyboardButton(
-                f"{NFT[x]['name']} — {rarity_name(NFT[x])}",
-                callback_data=f"sellwith_{nid}_{x}"
-            ))
-        bot.send_message(chat_id, f"🛒 С какой картиной продать «{NFT[nid]['name']}»?\nПара должна быть одной редкости.", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif data.startswith("sellwith_"):
-        if is_banned(chat_id):
-            bot.send_message(chat_id, ban_message(chat_id))
-            bot.answer_callback_query(call.id)
-            return
-        _, nid1, nid2 = data.split("_")
-        nid1, nid2 = int(nid1), int(nid2)
-        if nid1 not in NFT or nid2 not in NFT:
-            bot.answer_callback_query(call.id, "Картина не найдена.")
-            return
-        if nid1 not in get_owned_ids(chat_id) or nid2 not in get_owned_ids(chat_id):
-            bot.send_message(chat_id, "Одной из картин у тебя уже нет.")
-            bot.answer_callback_query(call.id)
-            return
-        if is_listed(nid1) or is_listed(nid2):
-            bot.send_message(chat_id, "Одна из картин уже выставлена на площадке.")
-            bot.answer_callback_query(call.id)
-            return
-        if NFT[nid1].get("rarity", "normal") != NFT[nid2].get("rarity", "normal"):
-            bot.send_message(chat_id, "Пара должна быть из картин одной редкости 🙂")
-            bot.answer_callback_query(call.id)
-            return
-        user_states[chat_id] = ("sellpair_price", nid1, nid2)
-        bot.send_message(chat_id,
-            f"💰 Напиши цену за ПАРУ целиком (только число):\n"
-            f"1) {NFT[nid1]['name']} — {rarity_name(NFT[nid1])}\n"
-            f"2) {NFT[nid2]['name']} — {rarity_name(NFT[nid2])}\n\n"
-            f"Допустимо: от {fmt_rub(PAIR_MIN_TOTAL)} до {fmt_rub(MAX_SELL_PRICE * 2)} ₽ за пару.")
+        user_states[chat_id] = ("sell_price", nid)
+        base = NFT[nid]["price"]
+        bot.send_message(chat_id, f"💰 Напиши цену продажи для {NFT[nid]['name']} (только число).\nВ каталоге она оценена в {fmt_rub(base)} ₽.\nДопустимый диапазон: {fmt_rub(MIN_PRICE)} – {fmt_rub(MAX_SELL_PRICE)} ₽.")
         bot.answer_callback_query(call.id)
 
     elif data == "my_lots":
@@ -1565,11 +1146,11 @@ def callbacks(call):
             bot.answer_callback_query(call.id)
             return
         listing_id = int(data.split("_")[1])
-        lot = cursor.execute("SELECT nft_id, nft_id2, seller_id, price FROM marketplace WHERE id = ?", (listing_id,)).fetchone()
+        lot = cursor.execute("SELECT nft_id, seller_id, price FROM marketplace WHERE id = ?", (listing_id,)).fetchone()
         if not lot:
             bot.answer_callback_query(call.id, "Лот уже не существует.")
             return
-        nft_id, nft_id2, seller_id, price = lot
+        nft_id, seller_id, price = lot
         if nft_id not in NFT:
             bot.answer_callback_query(call.id, "Эта картина больше не доступна.")
             return
@@ -1581,27 +1162,18 @@ def callbacks(call):
             return
         change_balance(chat_id, -price)
         change_balance(seller_id, price)
-        if nft_id2 and nft_id2 in NFT:
-            p1 = price // 2
-            for nid, p in ((nft_id, p1), (nft_id2, price - p1)):
-                transfer_ownership(nid, seller_id, chat_id, p)
-            cursor.execute("DELETE FROM marketplace WHERE id = ?", (listing_id,))
-            db.commit()
-            page_msgs.pop((chat_id, "market"), None)
-            safe_send_photo(chat_id, NFT[nft_id]["file"],
-                f"🎉 Пара куплена!\n"
-                f"1) {NFT[nft_id]['name']} — {rarity_name(NFT[nft_id])}\n"
-                f"2) {NFT[nft_id2]['name']} — {rarity_name(NFT[nft_id2])}\n\n"
-                f"💰 Оплачено: {fmt_rub(price)} ₽")
-            notify(seller_id, f"💰 Твою пару ({NFT[nft_id]['name']} + {NFT[nft_id2]['name']}) купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
-            bot.answer_callback_query(call.id, "Пара куплена!")
-            return
-        transfer_ownership(nft_id, seller_id, chat_id, price)
+        cursor.execute(
+            "INSERT INTO purchases (user_id, nft_id, nft_name, price, seller_id) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, nft_id, NFT[nft_id]["name"], price, seller_id)
+        )
         cursor.execute("DELETE FROM marketplace WHERE id = ?", (listing_id,))
         db.commit()
         page_msgs.pop((chat_id, "market"), None)
         safe_send_photo(chat_id, NFT[nft_id]["file"], f"🎉 Куплено на площадке!\n{NFT[nft_id]['name']} ({NFT[nft_id]['year']} год) теперь твой!")
-        notify(seller_id, f"💰 Твою картину {NFT[nft_id]['name']} купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
+        try:
+            bot.send_message(seller_id, f"💰 Твою картину {NFT[nft_id]['name']} купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
+        except Exception:
+            pass
         bot.answer_callback_query(call.id, "Покупка прошла!")
 
     elif data == "noop":
@@ -1611,10 +1183,11 @@ def callbacks(call):
         bot.answer_callback_query(call.id)
 
 # ---------- Запуск ----------
-print("Бот запущен ✅")
-while True:
+while True:  # если сеть мигнула — бот сам перезапускает приём сообщений
     try:
         bot.polling(non_stop=True, timeout=60)
     except Exception as e:
         print(f"Сбой соединения: {e}. Перезапуск через 5 секунд...")
         time.sleep(5)
+
+
