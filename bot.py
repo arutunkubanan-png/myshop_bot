@@ -28,7 +28,7 @@ SUPPORT_USERNAME = "@NFThub_support_bot"
 PAGE_SIZE = 1
 BG_FILE = "profile_bg.png"
 WEBAPP_PORT = int(os.environ.get("PORT", 8443))
-WEBAPP_URL = "https://nft-bot-h47h.onrender.com"
+#WEBAPP_URL = "https://nft-bot-h47h.onrender.com"
 # ===================================================
 
 bot = telebot.TeleBot(TOKEN)
