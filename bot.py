@@ -11,30 +11,29 @@ from datetime import datetime
 from telebot import types
 
 # ============ НАСТРОЙКИ — ЗАМЕНИ НА СВОЁ ============
-TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"   # ← смени токен! он засветился в переписке
+TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"   # ⚠️ СРОЧНО поменяй токен — он засветился в переписке!
 ADMIN_ID = 8770504764
-PAY_CARD = "2204 2402 9628 4682"    # ← номер твоей карты
-MIN_DEPOSIT = 10000                 # ← минимальное пополнение
-MAX_DEPOSIT = 100000                # ← максимальное пополнение
-MIN_WITHDRAW = 15000                # ← минимальный вывод
-MIN_PRICE = 15000                   # ← самая дешёвая картина
-MAX_PRICE = 150000                  # ← самая дорогая картина
-MAX_SELL_PRICE = 1000000            # ← максимум цены при перепродаже (за один экземпляр)
-PAIR_MIN_TOTAL = MIN_PRICE          # ← минимум цены за пару при продаже
-ULTRA_RARE_CHANCE = 10              # ← каждая n-я картина — сверхредкая
-ULTRA_RARE_MULT = 4                 # ← сверхредкая дороже во столько раз
-ULTRA_RARE_CAP = 500000             # ← потолок цены сверхредкой
+PAY_CARD = "2204 2402 9628 4682"
+MIN_DEPOSIT = 10000
+MAX_DEPOSIT = 100000
+MIN_WITHDRAW = 15000
+MIN_PRICE = 15000
+MAX_PRICE = 150000
+MAX_SELL_PRICE = 1000000
+PAIR_MIN_TOTAL = MIN_PRICE
+ULTRA_RARE_CHANCE = 10
+ULTRA_RARE_MULT = 4
+ULTRA_RARE_CAP = 500000
 SUPPORT_USERNAME = "@NFThub_support_bot"
 PAGE_SIZE = 1
 BG_FILE = "profile_bg.png"
-WEBAPP_PORT = int(os.environ.get("PORT", 8443))   # ← Render сам подставит свой порт
-WEBAPP_URL = "https://nft-bot-h47h.onrender.com"  # ← адрес витрины (мини-приложение включено)
+WEBAPP_PORT = int(os.environ.get("PORT", 8443))
+WEBAPP_URL = "https://nft-bot-h47h.onrender.com"
 # ===================================================
 
 bot = telebot.TeleBot(TOKEN)
 
 def notify(uid, text, reply_markup=None):
-    """Пишет пользователю; если он заблокировал бота — молча пропускает."""
     try:
         bot.send_message(uid, text, reply_markup=reply_markup)
     except Exception:
@@ -191,7 +190,6 @@ def get_owned_ids(user_id):
     return [r[0] for r in rows]
 
 def transfer_ownership(nft_id, from_user, to_user, price):
-    """Продаёт картину: у продавца владение помечается как проданное, покупателю добавляется запись."""
     cursor.execute(
         "UPDATE purchases SET active = 0 WHERE user_id = ? AND nft_id = ? AND active = 1",
         (from_user, nft_id)
@@ -243,7 +241,7 @@ _picture_paths = sorted(
 
 _picture_numbers = list(range(1, len(_picture_paths) + 1))
 
-# ---------- Лестница цен: 15 000 → 150 000 ----------
+# ---------- Лестница цен ----------
 def build_price_ladder(count):
     rnd = random.Random(4242)
     if count <= 1:
@@ -321,7 +319,7 @@ def make_background():
         w, h = 1080, 1000
         img = Image.new("RGB", (w, h), (10, 8, 16))
         d = ImageDraw.Draw(img)
-        top, bottom = (88, 40, 200), (28, 16, 60)
+                top, bottom = (88, 40, 200), (28, 16, 60)
         cx0, cy0, cx1, cy1 = 60, 60, w - 60, h - 60
         for y in range(cy0, cy1):
             t = (y - cy0) / (cy1 - cy0)
@@ -1120,7 +1118,7 @@ def text_handler(message):
         try:
             amount = int(message.text.strip())
         except ValueError:
-            bot.send_message(chat_id, "Нужно число, например: 20000:")
+            bot.send_message(chat_id, "Нужно число, например: 20000")
             return
         balance = get_balance(chat_id)
         if amount < MIN_WITHDRAW:
@@ -1418,10 +1416,6 @@ def callbacks(call):
         notify(uid, f"❌ Твоя заявка на вывод {fmt_rub(amount)} ₽ отклонена. Деньги возвращены на баланс.\n💰 Баланс: {fmt_rub(get_balance(uid))} ₽")
         bot.answer_callback_query(call.id)
 
-    elif data.startswith("cat_"):
-        bot.answer_callback_query(call.id)
-        send_catalog_page(chat_id, int(data.split("_")[1]))
-
     elif data.startswith("favshow_"):
         nid = int(data.split("_")[1])
         if nid not in NFT:
@@ -1592,7 +1586,6 @@ def callbacks(call):
         change_balance(chat_id, -price)
         change_balance(seller_id, price)
         if nft_id2 and nft_id2 in NFT:
-            # покупка пары
             p1 = price // 2
             for nid, p in ((nft_id, p1), (nft_id2, price - p1)):
                 transfer_ownership(nid, seller_id, chat_id, p)
@@ -1607,7 +1600,6 @@ def callbacks(call):
             notify(seller_id, f"💰 Твою пару ({NFT[nft_id]['name']} + {NFT[nft_id2]['name']}) купили за {fmt_rub(price)} ₽!\nБаланс: {fmt_rub(get_balance(seller_id))} ₽")
             bot.answer_callback_query(call.id, "Пара куплена!")
             return
-        # обычная одиночная покупка
         transfer_ownership(nft_id, seller_id, chat_id, price)
         cursor.execute("DELETE FROM marketplace WHERE id = ?", (listing_id,))
         db.commit()
