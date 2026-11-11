@@ -11,8 +11,8 @@ from datetime import datetime
 from telebot import types
 
 # ============ НАСТРОЙКИ — ЗАМЕНИ НА СВОЁ ============
-TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"   # ⚠️ СРОЧНО поменяй токен — он засветился в переписке!
-ADMIN_ID = 8770504764
+TOKEN = "9239140325:AAEvV2FCNUKx3oNKaTMsMhKYAOzoersJGUM"  # Вставь новый токен после отзыва старого
+ADMIN_ID = 8770504764  # Вставь свой Telegram ID
 PAY_CARD = "2204 2402 9628 4682"
 MIN_DEPOSIT = 10000
 MAX_DEPOSIT = 100000
@@ -319,7 +319,7 @@ def make_background():
         w, h = 1080, 1000
         img = Image.new("RGB", (w, h), (10, 8, 16))
         d = ImageDraw.Draw(img)
-                top, bottom = (88, 40, 200), (28, 16, 60)
+        top, bottom = (88, 40, 200), (28, 16, 60)
         cx0, cy0, cx1, cy1 = 60, 60, w - 60, h - 60
         for y in range(cy0, cy1):
             t = (y - cy0) / (cy1 - cy0)
@@ -647,12 +647,8 @@ def menu_market(message):
     if is_banned(message.chat.id):
         bot.send_message(message.chat.id, ban_message(message.chat.id))
         return
-    if WEBAPP_URL:
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🏪 Открыть витрину", web_app=types.WebAppInfo(url=WEBAPP_URL)))
-        bot.send_message(message.chat.id, "🏪 Площадка NFT:\n\nНажми кнопку — откроется витрина со всеми лотами.", reply_markup=markup)
-    else:
-        send_market_page(message.chat.id, 0)
+    # Открываем площадку прямо в Telegram: фотографии, цены и кнопки покупки.
+    send_market_page(message.chat.id, 0)
 
 @bot.message_handler(func=lambda m: m.text == "🆘 Поддержка")
 def menu_support(message):
