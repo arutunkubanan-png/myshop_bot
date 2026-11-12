@@ -357,25 +357,30 @@ def profile_keyboard(admin_view=False):
     markup.row(types.KeyboardButton("❤️ Избранное"), types.KeyboardButton("🖼 Мои NFT"))
     markup.row(types.KeyboardButton("➕ Создать NFT"), types.KeyboardButton("⚙️ Настройки"))
     markup.row(types.KeyboardButton("📜 Транзакции"), types.KeyboardButton("🏪 Площадка"))
-    markup.row(types.KeyboardButton("🖼 Каталог"))
+        markup.row(types.KeyboardButton("💰 Продать"))
+    if admin_view:
+        markup.row(types.KeyboardButton("🖼 Каталог"))
     markup.add(types.KeyboardButton("🆘 Поддержка"))
     return markup
+
 
 # ---------- Личный кабинет ----------
 def send_profile(chat_id, greet=False, name=None):
     register(chat_id)
     now = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-    if greet and name:
+        if greet and name:
+        catalog_line = "🖼 <b>Каталог</b> — вся коллекция\n" if chat_id == ADMIN_ID else ""
         text = (
             f"👋 <b>Привет, {name}!</b>\n\n"
             "Добро пожаловать в <b>NFT Маркет</b> — место, где живут коллекционные картины 💎\n\n"
             "🏪 <b>Площадка</b> — листай картины от дешёвых к дорогим\n"
-            "🖼 <b>Каталог</b> — вся коллекция\n"
+            + catalog_line +
+            "💰 <b>Продать</b> — выставь свои картины на продажу\n"
             "👤 <b>Личный кабинет</b> — баланс и твоя статистика\n"
             f"💳 <b>Пополнить</b> — закинь баланс от {fmt_rub(MIN_DEPOSIT)} ₽ и вперёд\n\n"
             "👇 Жми на кнопки ниже — начнём!"
         )
-    else:
+
         nick = get_username(chat_id)
         nick_line = f"Ник: <b>@{nick}</b>\n" if nick else ""
         owned = len(get_owned_ids(chat_id))
@@ -531,9 +536,15 @@ def menu_market(message):
         return
     send_market_page(message.chat.id, 0)
 
-@bot.message_handler(func=lambda m: m.text == "🖼 Каталог")
+@bot.message_handler(func=lambda m: m.text == "🖼 Каталог" and m.chat.id == ADMIN_ID)
 def menu_catalog(message):
     send_catalog_page(message.chat.id, 0)
+@bot.message_handler(func=lambda m: m.text == "💰 Продать")
+def menu_sell(message):
+    if is_banned(message.chat.id):
+        bot.send_message(message.chat.id, ban_message(message.chat.id))
+        return
+    start_multi_sell(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "🆘 Поддержка")
 def menu_support(message):
@@ -951,6 +962,34 @@ def text_handler(message):
 
     bot.send_message(chat_id, "Выбери действие кнопкой ниже 👇", reply_markup=profile_keyboard(admin_view=(chat_id == ADMIN_ID)))
 
+def start_multi_sell(chat_id):
+    owned = [nid for nid in get_owned_ids(chat_id) if nid in NFT]
+    if not owned:
+        bot.send_message(chat_id, "У тебя пока нет картин. Купи первую на 🏪 площадке!")
+        return
+    state = user_states.get(chat_id)
+    sel = set(state[1]) if isinstance(state, tuple) and state and state[0] == "multiselect" else set()
+    user_states[chat_id] = ("multiselect", sel)
+    send_multi_sell_menu(chat_id, sel)
+
+    
+
+def send_multi_sell_menu(chat_id, selected):
+    owned = [nid for nid in get_owned_ids(chat_id) if nid in NFT]
+    markup = types.InlineKeyboardMarkup()
+    for nid in owned:
+        mark = "☑️" if nid in selected else "⬜"
+        markup.add(types.InlineKeyboardButton(f"{mark} {NFT[nid]['name']}", callback_data=f"multisel_{nid}"))
+    if selected:
+        markup.add(types.InlineKeyboardButton(f"✅ Выставить на продажу ({len(selected)})", callback_data="multiconfirm"))
+    markup.add(types.InlineKeyboardButton("🚪 Отмена", callback_data="multiclear"))
+    text = (
+        "💰 Продажа картин.\n\n"
+        "Нажимай на картины, чтобы отметить их галочкой ☑️ (повторное нажатие снимает галочку).\n"
+        "Можно выбрать одну или несколько — цена будет единая для всех.\n\n"
+        f"Выбрано: {len(selected)}"
+    )
+    bot.send_message(chat_id, text, reply_markup=markup)
 # ---------- Площадка: просто листаешь, цены растут от дешёвых к дорогим ----------
 def send_market_page(chat_id, page):
     lots = cursor.execute(
@@ -1175,6 +1214,26 @@ def callbacks(call):
         except Exception:
             pass
         bot.answer_callback_query(call.id, "Покупка прошла!")
+
+        elif data.startswith("multisel_"):
+        nid = data[len("multisel_"):]
+        state = user_states.get(chat_id)
+        if state and state[0] == "multiselect":
+            sel = set(state[1])
+            if nid in sel:
+                sel.discard(nid)
+            else:
+                sel.add(nid)
+            user_states[chat_id] = ("multiselect", sel)
+            send_multi_sell_menu(chat_id, sel)
+    elif data == "multiconfirm":
+        state = user_states.get(chat_id)
+        if state and state[0] == "multiselect" and state[1]:
+            user_states[chat_id] = ("multi_price", set(state[1]))
+            bot.send_message(chat_id, "💰 Введи цену для выбранных картин (одним числом):")
+    elif data == "multiclear":
+        user_states.pop(chat_id, None)
+        bot.send_message(chat_id, "Продажа отменена.")
 
     elif data == "noop":
         bot.answer_callback_query(call.id)
