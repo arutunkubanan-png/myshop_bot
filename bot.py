@@ -10,9 +10,9 @@ from datetime import datetime
 from telebot import types
 
 # ============ НАСТРОЙКИ — ЗАМЕНИ НА СВОЁ ============
-TOKEN = ""   # ← новый токен (старый отзови в @BotFather!)
-ADMIN_ID =                         # ← твой числовой ID (узнать: @userinfobot)
-PAY_CARD = ""    # ← номер твоей карты
+TOKEN = "9199418160:AAHbUIc5brvirsQTxBkqSv4QYRKkFNEbFIc"   # ← новый токен (старый отзови в @BotFather!)
+ADMIN_ID = 8770504764                         # ← твой числовой ID (узнать: @userinfobot)
+PAY_CARD = "2204 2402 9628 4682"    # ← номер твоей карты
 MIN_DEPOSIT = 10000                 # ← минимальное пополнение
 MAX_DEPOSIT = 100000                # ← максимальное пополнение
 MIN_WITHDRAW = 15000                # ← минимальный вывод
