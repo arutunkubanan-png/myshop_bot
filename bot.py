@@ -1203,8 +1203,11 @@ def callbacks(call):
         change_balance(seller_id, price)
         cursor.execute(
             "INSERT INTO purchases (user_id, nft_id, nft_name, price, seller_id) VALUES (?, ?, ?, ?, ?)",
-            (message.from_user.id, nft_id, NFT[nft_id]["name"], price, seller_id)
+            (call.from_user.id, nft_id, NFT[nft_id]["name"], price, seller_id)
         )
+
+        
+
         cursor.execute("DELETE FROM marketplace WHERE id = ?", (listing_id,))
         db.commit()
         page_msgs.pop((chat_id, "market"), None)
