@@ -1,3 +1,22 @@
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class _RenderPingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def _run_render_port():
+    try:
+        port = int(os.environ.get("PORT", 8000))
+        HTTPServer(("0.0.0.0", port), _RenderPingHandler).serve_forever()
+    except Exception:
+        pass
+
+threading.Thread(target=_run_render_port, daemon=True).start()
+
 import threading
 import time
 import telebot
