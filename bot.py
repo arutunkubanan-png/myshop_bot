@@ -10,7 +10,16 @@ from datetime import datetime
 from telebot import types
 
 # ============ НАСТРОЙКИ — ЗАМЕНИ НА СВОЁ ============
-TOKEN = os.environ.get("9199418160:AAHbUIc5brvirsQTxBkqSv4QYRKkFNEbFIc")
+TOKEN = os.environ.get("9199418160:AAHbUIc5brvirsQTxBkqSv4QYRKkFNEbFIc", "")
+
+if not TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN не найден! Проверь имя переменной в Render -> Environment "
+        "(должно быть ровно BOT_TOKEN, заглавными, без пробелов)."
+    )
+
+bot = telebot.TeleBot(TOKEN)
+
 ADMIN_ID = 8770504764                         # ← твой числовой ID (узнать: @userinfobot)
 PAY_CARD = "2204 2402 9628 4682"    # ← номер твоей карты
 MIN_DEPOSIT = 10000                 # ← минимальное пополнение
